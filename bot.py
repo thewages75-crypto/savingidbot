@@ -437,8 +437,7 @@ def receive_import(message):
 def start(message):
 
     user_id = message.from_user.id
-
-    # check if user already has a session
+    #check if user alredy have key
     result = db_query(
         "SELECT vault_key FROM sessions WHERE user_id=%s",
         (user_id,),
@@ -460,7 +459,6 @@ def start(message):
             "INSERT INTO sessions (user_id, vault_key) VALUES (%s,%s)",
             (user_id, vault_key)
         )
-
 
     if user_id == ADMIN_ID:
 
