@@ -100,6 +100,10 @@ user_id BIGINT PRIMARY KEY,
 vault_key TEXT
 )
 """)
+db_query("""
+ALTER TABLE media
+ADD COLUMN IF NOT EXISTS media_group_id TEXT
+""")
 # ==============================
 # SAFE DATABASE QUERY
 # ==============================
