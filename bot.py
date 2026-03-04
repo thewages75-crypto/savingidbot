@@ -4,6 +4,11 @@ import random
 import string
 import os
 # ==============================
+# DATABASE CONNECTION POOL
+# ==============================
+
+from psycopg2.pool import SimpleConnectionPool
+# ==============================
 # TELEGRAM ALBUM MEDIA TYPES
 # ==============================
 
@@ -33,9 +38,44 @@ send_queue = Queue()
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # Database connection
-conn = psycopg2.connect(DATABASE_URL)
-cur = conn.cursor()
+# ==============================
+# CREATE CONNECTION POOL
+# ==============================
 
+db_pool = SimpleConnectionPool(
+    1,      # minimum connections
+    10,     # maximum connections
+    DATABASE_URL
+)
+cur = conn.cursor()
+# ==============================
+# SAFE DATABASE QUERY FUNCTION
+# ==============================
+
+def db_query(query, params=None, fetch=False):
+
+    conn = db_pool.getconn()
+
+    try:
+
+        cursor = conn.cursor()
+
+        cursor.execute(query, params)
+
+        result = None
+
+        if fetch:
+            result = cursor.fetchall()
+
+        conn.commit()
+
+        cursor.close()
+
+        return result
+
+    finally:
+
+        db_pool.putconn(conn)
 print("Database connected...")
 
 cur.execute("""
@@ -62,7 +102,28 @@ user_id BIGINT PRIMARY KEY,
 vault_key TEXT
 )
 """)
+# ==============================
+# SAFE DATABASE QUERY
+# ==============================
 
+def db_query(query, params=None, fetch=False):
+
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(query, params)
+
+        if fetch:
+            result = cursor.fetchall()
+        else:
+            result = None
+
+        conn.commit()
+
+    finally:
+        cursor.close()
+
+    return result
 #====================
 # GENRATE KEY
 #====================
@@ -73,17 +134,22 @@ def generate_vault_key():
 # GET USER VAULT FUNCTION
 # ==============================
 
+# ==============================
+# GET USER VAULT
+# ==============================
+
 def get_user_vault(user_id):
-    """
-    Returns the vault key for a user session
-    """
-    cur.execute("SELECT vault_key FROM sessions WHERE user_id=%s", (user_id,))
-    result = cur.fetchone()
 
-    if result:
-        return result[0]
+    result = db_query(
+        "SELECT vault_key FROM sessions WHERE user_id=%s",
+        (user_id,),
+        fetch=True
+    )
 
-    return None
+    # extract vault key safely
+    vault_key = result[0][0] if result else None
+
+    return vault_key
 def user_menu():
 
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -380,8 +446,8 @@ def start(message):
     user_id = message.from_user.id
 
     # check if user already has a session
-    cur.execute("SELECT vault_key FROM sessions WHERE user_id=%s", (user_id,))
-    result = cur.fetchone()
+    result= db_query("SELECT vault_key FROM sessions WHERE user_id=%s", (user_id,))
+    fetch=True
 
     if result:
         vault_key = result[0]
@@ -426,8 +492,8 @@ def login(message):
         bot.reply_to(message, "Usage:\n/login VAULT_KEY")
         return
 
-    cur.execute("SELECT vault_key FROM vaults WHERE vault_key=%s", (key,))
-    result = cur.fetchone()
+    result = db_query("SELECT vault_key FROM vaults WHERE vault_key=%s", (key,))
+    fetch=True
 
     if not result:
         bot.reply_to(message, "Invalid vault key.")
@@ -588,12 +654,10 @@ def process_albums():
 
             for vault_key, file_id, media_type in items:
 
-                cur.execute(
-                    "INSERT INTO media (vault_key, file_id, media_type) VALUES (%s,%s,%s)",
-                    (vault_key, file_id, media_type)
+                db_query(
+                    "INSERT INTO media (vault_key,file_id,media_type) VALUES (%s,%s,%s)",
+                    (vault_key,file_id,media_type)
                 )
-
-            conn.commit()
 
 
 threading.Thread(target=process_albums, daemon=True).start()
