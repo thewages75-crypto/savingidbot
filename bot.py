@@ -57,23 +57,21 @@ def db_query(query, params=None, fetch=False):
     conn = db_pool.getconn()
 
     try:
-
         cursor = conn.cursor()
 
         cursor.execute(query, params)
 
         result = None
-
         if fetch:
             result = cursor.fetchall()
 
+        conn.commit()   # important
 
         cursor.close()
 
         return result
 
     finally:
-
         db_pool.putconn(conn)
 print("Database connected...")
 
@@ -366,7 +364,7 @@ def export_db(message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    rows = db_query("SELECT * FROM media")
+    rows = db_query("SELECT * FROM media", fetch=True)
     
 
     filename = "media_export.csv"
@@ -485,8 +483,11 @@ def login(message):
         bot.reply_to(message, "Usage:\n/login VAULT_KEY")
         return
 
-    result = db_query("SELECT vault_key FROM vaults WHERE vault_key=%s", (key,))
-    fetch=True
+    result = db_query(
+        "SELECT vault_key FROM vaults WHERE vault_key=%s",
+        (key,),
+        fetch=True
+    )
 
     if not result:
         bot.reply_to(message, "Invalid vault key.")
@@ -611,10 +612,7 @@ def process_media():
                     )
 
                 # send confirmation
-                bot.send_message(
-                    user_id,
-                    f"✅ Stored {len(items)} media successfully."
-                )
+                send_queue.put((bot.send_message, (user_id, f"✅ Stored {len(items)} media successfully.")))
 
                 del media_buffer[user_id][group_id]
 
