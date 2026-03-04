@@ -5,7 +5,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-ADMIN_ID = 123456789
+ADMIN_ID = 8305774350
 
 # DATABASE_URL = "postgresql://user:password@localhost:5432/media_db"
 
