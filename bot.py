@@ -47,7 +47,7 @@ db_pool = SimpleConnectionPool(
     10,     # maximum connections
     DATABASE_URL
 )
-cur = conn.cursor()
+
 # ==============================
 # SAFE DATABASE QUERY FUNCTION
 # ==============================
@@ -67,7 +67,6 @@ def db_query(query, params=None, fetch=False):
         if fetch:
             result = cursor.fetchall()
 
-        conn.commit()
 
         cursor.close()
 
@@ -78,7 +77,7 @@ def db_query(query, params=None, fetch=False):
         db_pool.putconn(conn)
 print("Database connected...")
 
-cur.execute("""
+db_query("""
 CREATE TABLE IF NOT EXISTS vaults(
 id SERIAL PRIMARY KEY,
 vault_key TEXT UNIQUE,
@@ -86,17 +85,18 @@ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
 
-cur.execute("""
+db_query("""
 CREATE TABLE IF NOT EXISTS media(
 id SERIAL PRIMARY KEY,
 vault_key TEXT,
 file_id TEXT,
 media_type TEXT,
+media_group_id TEXT,
 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
 
-cur.execute("""
+db_query("""
 CREATE TABLE IF NOT EXISTS sessions(
 user_id BIGINT PRIMARY KEY,
 vault_key TEXT
@@ -106,28 +106,28 @@ vault_key TEXT
 # SAFE DATABASE QUERY
 # ==============================
 
-def db_query(query, params=None, fetch=False):
+# def db_query(query, params=None, fetch=False):
 
-    cursor = conn.cursor()
+#     cursor = conn.cursor()
 
-    try:
-        cursor.execute(query, params)
+#     try:
+#         cursor.execute(query, params)
 
-        if fetch:
-            result = cursor.fetchall()
-        else:
-            result = None
+#         if fetch:
+#             result = cursor.fetchall()
+#         else:
+#             result = None
 
-        conn.commit()
+#         conn.commit()
 
-    finally:
-        cursor.close()
+#     finally:
+#         cursor.close()
 
-    return result
+#     return result
 #====================
 # GENRATE KEY
 #====================
-conn.commit()
+
 def generate_vault_key():
     return "SPIDER-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
 # ==============================
@@ -279,8 +279,7 @@ def total_vaults(message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    cur.execute("SELECT COUNT(*) FROM vaults")
-    count = cur.fetchone()[0]
+    count = db_query("SELECT COUNT(*) FROM vaults", fetch=True)[0][0]
 
     bot.send_message(
         message.chat.id,
@@ -296,8 +295,7 @@ def total_media(message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    cur.execute("SELECT COUNT(*) FROM media")
-    count = cur.fetchone()[0]
+    count = db_query("SELECT COUNT(*) FROM media",fetch=True)[0][0]
 
     bot.send_message(
         message.chat.id,
@@ -313,14 +311,11 @@ def bot_stats(message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    cur.execute("SELECT COUNT(*) FROM vaults")
-    vaults = cur.fetchone()[0]
+    vaults = db_query("SELECT COUNT(*) FROM vaults",fetch=True)[0][0]
 
-    cur.execute("SELECT COUNT(*) FROM media")
-    media = cur.fetchone()[0]
+    media = db_query("SELECT COUNT(*) FROM media",fetch=True)[0][0]
 
-    cur.execute("SELECT COUNT(*) FROM sessions")
-    sessions = cur.fetchone()[0]
+    sessions = db_query("SELECT COUNT(*) FROM sessions",fetch=True)[0][0]
 
     bot.send_message(
         message.chat.id,
@@ -371,8 +366,8 @@ def export_db(message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    cur.execute("SELECT * FROM media")
-    rows = cur.fetchall()
+    rows = db_query("SELECT * FROM media")
+    
 
     filename = "media_export.csv"
 
@@ -430,12 +425,10 @@ def receive_import(message):
 
         for row in reader:
 
-            cur.execute(
+            db_query(
                 "INSERT INTO media (id,vault_key,file_id,media_type,uploaded_at) VALUES (%s,%s,%s,%s,%s)",
                 row
             )
-
-    conn.commit()
 
     waiting_import = False
 
@@ -446,26 +439,28 @@ def start(message):
     user_id = message.from_user.id
 
     # check if user already has a session
-    result= db_query("SELECT vault_key FROM sessions WHERE user_id=%s", (user_id,))
-    fetch=True
+    result = db_query(
+        "SELECT vault_key FROM sessions WHERE user_id=%s",
+        (user_id,),
+        fetch=True
+    )
 
     if result:
-        vault_key = result[0]
+        vault_key = result[0][0]
 
     else:
         vault_key = generate_vault_key()
 
-        cur.execute(
+        db_query(
             "INSERT INTO vaults (vault_key) VALUES (%s)",
             (vault_key,)
         )
 
-        cur.execute(
+        db_query(
             "INSERT INTO sessions (user_id, vault_key) VALUES (%s,%s)",
             (user_id, vault_key)
         )
 
-        conn.commit()
 
     if user_id == ADMIN_ID:
 
@@ -501,14 +496,13 @@ def login(message):
 
     user_id = message.from_user.id
 
-    cur.execute("""
+    db_query("""
     INSERT INTO sessions (user_id, vault_key)
     VALUES (%s,%s)
     ON CONFLICT (user_id)
     DO UPDATE SET vault_key=EXCLUDED.vault_key
     """, (user_id, key))
 
-    conn.commit()
 
     bot.reply_to(message, "Vault connected successfully.")
 # ==============================
@@ -609,7 +603,7 @@ def process_media():
                 # store media
                 for file_id, media_type in items:
 
-                    cur.execute(
+                    db_query(
                         """
                         INSERT INTO media
                         (vault_key,file_id,media_type,media_group_id)
@@ -617,8 +611,6 @@ def process_media():
                         """,
                         (vault_key, file_id, media_type, str(group_id))
                     )
-
-                conn.commit()
 
                 # send confirmation
                 bot.send_message(
@@ -639,28 +631,28 @@ threading.Thread(target=process_media, daemon=True).start()
 import threading
 import time
 
-def process_albums():
+# def process_albums():
 
-    while True:
+#     while True:
 
-        time.sleep(2)
+#         time.sleep(2)
 
-        if not albums:
-            continue
+#         if not albums:
+#             continue
 
-        for group_id in list(albums.keys()):
+#         for group_id in list(albums.keys()):
 
-            items = albums.pop(group_id)
+#             items = albums.pop(group_id)
 
-            for vault_key, file_id, media_type in items:
+#             for vault_key, file_id, media_type in items:
 
-                db_query(
-                    "INSERT INTO media (vault_key,file_id,media_type) VALUES (%s,%s,%s)",
-                    (vault_key,file_id,media_type)
-                )
+#                 db_query(
+#                     "INSERT INTO media (vault_key,file_id,media_type) VALUES (%s,%s,%s)",
+#                     (vault_key,file_id,media_type)
+#                 )
 
 
-threading.Thread(target=process_albums, daemon=True).start()
+# threading.Thread(target=process_albums, daemon=True).start()
 # ==============================
 # MEDIA PAGINATION FUNCTION
 # ==============================
@@ -674,15 +666,13 @@ def send_media_page(chat_id, vault_key, page=0):
     limit = 10
     offset = page * limit
 
-    cur.execute("""
-        SELECT file_id, media_type, media_group_id
-        FROM media
-        WHERE vault_key=%s
-        ORDER BY id DESC
-        LIMIT %s OFFSET %s
-    """, (vault_key, limit, offset))
-
-    rows = cur.fetchall()
+    rows = db_query("""
+    SELECT file_id, media_type, media_group_id
+    FROM media
+    WHERE vault_key=%s
+    ORDER BY id DESC
+    LIMIT %s OFFSET %s
+    """, (vault_key, limit, offset), fetch=True)
 
     if not rows:
         bot.send_message(chat_id, "No media stored.")
@@ -823,12 +813,11 @@ def vault_stats(message):
         return
 
     # total media count
-    cur.execute(
-        "SELECT COUNT(*) FROM media WHERE vault_key=%s",
-        (vault_key,)
-    )
-
-    total_media = cur.fetchone()[0]
+    total_media = db_query(
+    "SELECT COUNT(*) FROM media WHERE vault_key=%s",
+    (vault_key,),
+    fetch=True
+    )[0][0]
 
     bot.send_message(
         message.chat.id,
