@@ -3,14 +3,32 @@ import psycopg2
 import random
 import string
 import os
+# ==============================
+# TELEGRAM ALBUM MEDIA TYPES
+# ==============================
+
+from telebot.types import InputMediaPhoto, InputMediaVideo, InputMediaDocument
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-
+albums = {}
 ADMIN_ID = 8305774350
+# ==============================
+# MEDIA BUFFER SYSTEM
+# ==============================
 
-# DATABASE_URL = "postgresql://user:password@localhost:5432/media_db"
+import threading
+import time
+
+media_buffer = {}
+# ==============================
+# SEND QUEUE SYSTEM
+# ==============================
+
+from queue import Queue
+
+send_queue = Queue()
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -44,6 +62,7 @@ user_id BIGINT PRIMARY KEY,
 vault_key TEXT
 )
 """)
+
 #====================
 # GENRATE KEY
 #====================
@@ -81,7 +100,28 @@ def user_menu():
 
     return kb
 
+# ==============================
+# SEND WORKER (RATE LIMIT)
+# ==============================
 
+def send_worker():
+
+    while True:
+
+        func, args = send_queue.get()
+
+        try:
+            func(*args)
+
+        except Exception as e:
+            print("Send error:", e)
+
+        time.sleep(0.04)  # about 25 messages per second
+
+        send_queue.task_done()
+
+
+threading.Thread(target=send_worker, daemon=True).start()
 def admin_menu():
 
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -223,6 +263,36 @@ def bot_stats(message):
         f"Total Media: {media}\n"
         f"Active Sessions: {sessions}"
     )
+# ==============================
+# SAFE SEND FUNCTIONS
+# ==============================
+
+def safe_send_photo(chat_id, file_id):
+    send_queue.put((bot.send_photo, (chat_id, file_id)))
+
+
+def safe_send_video(chat_id, file_id):
+    send_queue.put((bot.send_video, (chat_id, file_id)))
+
+
+def safe_send_document(chat_id, file_id):
+    send_queue.put((bot.send_document, (chat_id, file_id)))
+
+
+def safe_send_animation(chat_id, file_id):
+    send_queue.put((bot.send_animation, (chat_id, file_id)))
+
+
+def safe_send_audio(chat_id, file_id):
+    send_queue.put((bot.send_audio, (chat_id, file_id)))
+
+
+def safe_send_voice(chat_id, file_id):
+    send_queue.put((bot.send_voice, (chat_id, file_id)))
+
+
+def safe_send_sticker(chat_id, file_id):
+    send_queue.put((bot.send_sticker, (chat_id, file_id)))
 # ==============================
 # EXPORT DATABASE
 # ==============================
@@ -379,28 +449,28 @@ def login(message):
 # MEDIA HANDLER
 # ==============================
 
+# ==============================
+# MEDIA HANDLER (ALBUM SUPPORT)
+# ==============================
+
+# ==============================
+# MEDIA HANDLER WITH BUFFER
+# ==============================
+
 @bot.message_handler(content_types=[
-    'photo',
-    'video',
-    'document',
-    'animation',
-    'audio',
-    'voice',
-    'sticker'
+    'photo','video','document','animation',
+    'audio','voice','sticker'
 ])
-def save_media(message):
+def handle_media(message):
 
     user_id = message.from_user.id
-
-    # check if user is connected to a vault
     vault_key = get_user_vault(user_id)
 
     if not vault_key:
-        bot.reply_to(message, "You are not connected to a vault.\nUse /start or /login.")
+        bot.reply_to(message, "You are not connected to a vault.")
         return
 
-    # detect media type and extract file_id
-
+    # detect media
     file_id = None
     media_type = None
 
@@ -432,17 +502,107 @@ def save_media(message):
         file_id = message.sticker.file_id
         media_type = "sticker"
 
-    # store media in database
-    cur.execute(
-        "INSERT INTO media (vault_key, file_id, media_type) VALUES (%s,%s,%s)",
-        (vault_key, file_id, media_type)
-    )
+    group_id = message.media_group_id or message.message_id
 
-    conn.commit()
+    # create buffer for user
+    if user_id not in media_buffer:
+        media_buffer[user_id] = {}
 
-    bot.reply_to(message, "✅ Media saved to your vault.")
+    if group_id not in media_buffer[user_id]:
+        media_buffer[user_id][group_id] = {
+            "vault_key": vault_key,
+            "items": [],
+            "timestamp": time.time()
+        }
+
+    media_buffer[user_id][group_id]["items"].append((file_id, media_type))
+# ==============================
+# MEDIA PROCESSOR
+# ==============================
+
+def process_media():
+
+    while True:
+
+        time.sleep(3)
+
+        now = time.time()
+
+        for user_id in list(media_buffer.keys()):
+
+            for group_id in list(media_buffer[user_id].keys()):
+
+                data = media_buffer[user_id][group_id]
+
+                if now - data["timestamp"] < 3:
+                    continue
+
+                vault_key = data["vault_key"]
+                items = data["items"]
+
+                # store media
+                for file_id, media_type in items:
+
+                    cur.execute(
+                        """
+                        INSERT INTO media
+                        (vault_key,file_id,media_type,media_group_id)
+                        VALUES (%s,%s,%s,%s)
+                        """,
+                        (vault_key, file_id, media_type, str(group_id))
+                    )
+
+                conn.commit()
+
+                # send confirmation
+                bot.send_message(
+                    user_id,
+                    f"✅ Stored {len(items)} media successfully."
+                )
+
+                del media_buffer[user_id][group_id]
+
+        time.sleep(1)
+
+
+threading.Thread(target=process_media, daemon=True).start()
+# ==============================
+# PROCESS ALBUMS
+# ==============================
+
+import threading
+import time
+
+def process_albums():
+
+    while True:
+
+        time.sleep(2)
+
+        if not albums:
+            continue
+
+        for group_id in list(albums.keys()):
+
+            items = albums.pop(group_id)
+
+            for vault_key, file_id, media_type in items:
+
+                cur.execute(
+                    "INSERT INTO media (vault_key, file_id, media_type) VALUES (%s,%s,%s)",
+                    (vault_key, file_id, media_type)
+                )
+
+            conn.commit()
+
+
+threading.Thread(target=process_albums, daemon=True).start()
 # ==============================
 # MEDIA PAGINATION FUNCTION
+# ==============================
+
+# ==============================
+# MEDIA VIEWER WITH ALBUM SUPPORT
 # ==============================
 
 def send_media_page(chat_id, vault_key, page=0):
@@ -451,7 +611,7 @@ def send_media_page(chat_id, vault_key, page=0):
     offset = page * limit
 
     cur.execute("""
-        SELECT file_id, media_type
+        SELECT file_id, media_type, media_group_id
         FROM media
         WHERE vault_key=%s
         ORDER BY id DESC
@@ -461,34 +621,69 @@ def send_media_page(chat_id, vault_key, page=0):
     rows = cur.fetchall()
 
     if not rows:
-        bot.send_message(chat_id, "No media stored yet.")
+        bot.send_message(chat_id, "No media stored.")
         return
 
-    # send media
-    for file_id, media_type in rows:
+    albums = {}
+    singles = []
+
+    # group albums
+    for file_id, media_type, group_id in rows:
+
+        if group_id:
+
+            if group_id not in albums:
+                albums[group_id] = []
+
+            albums[group_id].append((file_id, media_type))
+
+        else:
+            singles.append((file_id, media_type))
+
+    # send albums
+    for group_id, items in albums.items():
+
+        media_group = []
+
+        for file_id, media_type in items:
+
+            if media_type == "photo":
+                media_group.append(InputMediaPhoto(file_id))
+
+            elif media_type == "video":
+                media_group.append(InputMediaVideo(file_id))
+
+            elif media_type == "document":
+                media_group.append(InputMediaDocument(file_id))
+
+        if media_group:
+            send_queue.put((bot.send_media_group, (chat_id, media_group)))
+
+    # send single media
+    for file_id, media_type in singles:
 
         if media_type == "photo":
-            bot.send_photo(chat_id, file_id)
+            safe_send_photo(chat_id, file_id)
 
         elif media_type == "video":
-            bot.send_video(chat_id, file_id)
+            safe_send_video(chat_id, file_id)
 
         elif media_type == "document":
-            bot.send_document(chat_id, file_id)
+            safe_send_document(chat_id, file_id)
 
         elif media_type == "animation":
-            bot.send_animation(chat_id, file_id)
+            safe_send_animation(chat_id, file_id)
 
         elif media_type == "audio":
-            bot.send_audio(chat_id, file_id)
+            safe_send_audio(chat_id, file_id)
 
         elif media_type == "voice":
-            bot.send_voice(chat_id, file_id)
+            safe_send_voice(chat_id, file_id)
 
         elif media_type == "sticker":
-            bot.send_sticker(chat_id, file_id)
+            safe_send_sticker(chat_id, file_id)
 
-    # pagination buttons
+    # navigation buttons
     markup = InlineKeyboardMarkup()
 
     markup.row(
