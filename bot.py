@@ -635,12 +635,12 @@ def process_media():
                     continue
 
                 db_query(
-                    """
-                    INSERT INTO media
-                    (vault_key,file_id,file_unique_id,media_type,media_group_id)
-                    VALUES (%s,%s,%s,%s,%s)
-                    """,
-                    (vault_key, file_id, file_unique_id, media_type, str(group_id))
+                """
+                INSERT INTO media
+                (vault_key,file_id,file_unique_id,media_type,media_group_id)
+                VALUES (%s,%s,%s,%s,%s)
+                """,
+                (vault_key, file_id, file_unique_id, media_type, None)
                 )
 
                 saved += 1
