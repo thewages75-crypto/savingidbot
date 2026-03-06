@@ -100,6 +100,11 @@ user_id BIGINT PRIMARY KEY,
 vault_key TEXT
 )
 """)
+db_query("""
+ALTER TABLE media
+ADD COLUMN IF NOT EXISTS file_unique_id TEXT
+""")
+
 # ==============================
 # SAFE DATABASE QUERY
 # ==============================
@@ -548,34 +553,39 @@ def handle_media(message):
 
     if message.photo:
         file_id = message.photo[-1].file_id
+        file_unique_id = message.photo[-1].file_unique_id
         media_type = "photo"
-
     elif message.video:
         file_id = message.video.file_id
+        file_unique_id = message.video.file_unique_id
         media_type = "video"
 
     elif message.document:
         file_id = message.document.file_id
+        file_unique_id = message.document.file_unique_id
         media_type = "document"
 
     elif message.animation:
         file_id = message.animation.file_id
+        file_unique_id = message.animation.file_unique_id
         media_type = "animation"
 
     elif message.audio:
         file_id = message.audio.file_id
+        file_unique_id = message.audio.file_unique_id
         media_type = "audio"
 
     elif message.voice:
         file_id = message.voice.file_id
+        file_unique_id = message.voice.file_unique_id
         media_type = "voice"
 
     elif message.sticker:
         file_id = message.sticker.file_id
+        file_unique_id = message.sticker.file_unique_id
         media_type = "sticker"
-
     group_id = message.media_group_id or "single"
-
+    
     # create buffer for user
     if user_id not in media_buffer:
         media_buffer[user_id] = {
@@ -583,9 +593,10 @@ def handle_media(message):
             "items": [],
             "timestamp": time.time()
         }
-
-    media_buffer[user_id]["items"].append((file_id, media_type))
+    media_buffer[user_id]["items"].append((file_id, file_unique_id, media_type))
+    # media_buffer[user_id]["items"].append((file_id, media_type))
     media_buffer[user_id]["timestamp"] = time.time()
+    
 # ==============================
 # MEDIA PROCESSOR
 # ==============================
@@ -608,21 +619,45 @@ def process_media():
             vault_key = data["vault_key"]
             items = data["items"]
 
-            for file_id, media_type in items:
+            duplicates = 0
+            saved = 0
+
+            for file_id, file_unique_id, media_type in items:
+
+                exists = db_query(
+                    "SELECT 1 FROM media WHERE file_unique_id=%s LIMIT 1",
+                    (file_unique_id,),
+                    fetch=True
+                )
+
+                if exists:
+                    duplicates += 1
+                    continue
 
                 db_query(
                     """
                     INSERT INTO media
-                    (vault_key,file_id,media_type,media_group_id)
-                    VALUES (%s,%s,%s,%s)
+                    (vault_key,file_id,file_unique_id,media_type,media_group_id)
+                    VALUES (%s,%s,%s,%s,%s)
                     """,
-                    (vault_key, file_id, media_type, None)
+                    (vault_key, file_id, file_unique_id, media_type, str(group_id))
                 )
 
-            send_queue.put((
-                bot.send_message,
-                (user_id, f"✅ Stored {len(items)} media successfully.")
-            ))
+                saved += 1
+            msg = ""
+
+            if saved:
+                msg += f"✅ Stored {saved} media.\n"
+
+            if duplicates:
+                msg += f"⚠️ {duplicates} duplicate media skipped."
+
+            if msg:
+                send_queue.put((bot.send_message, (user_id, msg)))
+            # send_queue.put((
+            #     bot.send_message,
+            #     (user_id, f"✅ Stored {len(items)} media successfully.")
+            # ))
 
             del media_buffer[user_id]
 
