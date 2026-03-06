@@ -172,18 +172,23 @@ def send_worker():
 
     while True:
 
-        func, args = send_queue.get()
+        item = send_queue.get()
+
+        if len(item) == 2:
+            func, args = item
+            kwargs = {}
+        else:
+            func, args, kwargs = item
 
         try:
-            func(*args)
+            func(*args, **kwargs)
 
         except Exception as e:
             print("Send error:", e)
 
-        time.sleep(0.04)  # about 25 messages per second
+        time.sleep(0.04)
 
         send_queue.task_done()
-
 
 threading.Thread(target=send_worker, daemon=True).start()
 def admin_menu():
@@ -325,8 +330,14 @@ def bot_stats(message):
 # ==============================
 # SAFE SEND FUNCTIONS
 # ==============================
+# ==============================
+# SAFE MESSAGE SENDER
+# ==============================
+
 def safe_send_message(chat_id, text, markup=None):
-    send_queue.put((bot.send_message, (chat_id, text, None, None, None, markup)))
+    send_queue.put(
+        (bot.send_message, (chat_id, text), {"reply_markup": markup})
+    )
 
 def safe_send_photo(chat_id, file_id):
     send_queue.put((bot.send_photo, (chat_id, file_id)))
@@ -741,10 +752,11 @@ def send_media_page(chat_id, vault_key, page=0):
     )
 
     # bot.send_message(chat_id, f"Page {page+1}", reply_markup=markup)
-    send_queue.put(
-        (bot.send_message, (chat_id, f"Page {page+1}", None, None, None, markup))
-    )
     safe_send_message(chat_id, f"Page {page+1}", markup)
+    # send_queue.put(
+    #     (bot.send_message,(chat_id, f"Page {page+1}", None, None, None, markup))
+    # )
+    # safe_send_message(chat_id, f"Page {page+1}", markup)
 # ==============================
 # MY MEDIA BUTTON
 # ==============================
