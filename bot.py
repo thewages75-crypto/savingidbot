@@ -100,10 +100,6 @@ user_id BIGINT PRIMARY KEY,
 vault_key TEXT
 )
 """)
-db_query("""
-ALTER TABLE media
-ADD COLUMN IF NOT EXISTS media_group_id TEXT
-""")
 # ==============================
 # SAFE DATABASE QUERY
 # ==============================
@@ -329,6 +325,8 @@ def bot_stats(message):
 # ==============================
 # SAFE SEND FUNCTIONS
 # ==============================
+def safe_send_message(chat_id, text, markup=None):
+    send_queue.put((bot.send_message, (chat_id, text, None, None, None, markup)))
 
 def safe_send_photo(chat_id, file_id):
     send_queue.put((bot.send_photo, (chat_id, file_id)))
@@ -565,20 +563,18 @@ def handle_media(message):
         file_id = message.sticker.file_id
         media_type = "sticker"
 
-    group_id = message.media_group_id or message.message_id
+    group_id = message.media_group_id or "single"
 
     # create buffer for user
     if user_id not in media_buffer:
-        media_buffer[user_id] = {}
-
-    if group_id not in media_buffer[user_id]:
-        media_buffer[user_id][group_id] = {
+        media_buffer[user_id] = {
             "vault_key": vault_key,
             "items": [],
             "timestamp": time.time()
         }
 
-    media_buffer[user_id][group_id]["items"].append((file_id, media_type))
+    media_buffer[user_id]["items"].append((file_id, media_type))
+    media_buffer[user_id]["timestamp"] = time.time()
 # ==============================
 # MEDIA PROCESSOR
 # ==============================
@@ -587,38 +583,37 @@ def process_media():
 
     while True:
 
-        time.sleep(3)
+        time.sleep(2)
 
         now = time.time()
 
         for user_id in list(media_buffer.keys()):
 
-            for group_id in list(media_buffer[user_id].keys()):
+            data = media_buffer[user_id]
 
-                data = media_buffer[user_id][group_id]
+            if now - data["timestamp"] < 3:
+                continue
 
-                if now - data["timestamp"] < 3:
-                    continue
+            vault_key = data["vault_key"]
+            items = data["items"]
 
-                vault_key = data["vault_key"]
-                items = data["items"]
+            for file_id, media_type in items:
 
-                # store media
-                for file_id, media_type in items:
+                db_query(
+                    """
+                    INSERT INTO media
+                    (vault_key,file_id,media_type,media_group_id)
+                    VALUES (%s,%s,%s,%s)
+                    """,
+                    (vault_key, file_id, media_type, None)
+                )
 
-                    db_query(
-                        """
-                        INSERT INTO media
-                        (vault_key,file_id,media_type,media_group_id)
-                        VALUES (%s,%s,%s,%s)
-                        """,
-                        (vault_key, file_id, media_type, str(group_id))
-                    )
+            send_queue.put((
+                bot.send_message,
+                (user_id, f"✅ Stored {len(items)} media successfully.")
+            ))
 
-                # send confirmation
-                send_queue.put((bot.send_message, (user_id, f"✅ Stored {len(items)} media successfully.")))
-
-                del media_buffer[user_id][group_id]
+            del media_buffer[user_id]
 
         time.sleep(1)
 
@@ -745,7 +740,11 @@ def send_media_page(chat_id, vault_key, page=0):
         InlineKeyboardButton("➡ Next", callback_data=f"media_{page+1}")
     )
 
-    bot.send_message(chat_id, f"Page {page+1}", reply_markup=markup)
+    # bot.send_message(chat_id, f"Page {page+1}", reply_markup=markup)
+    send_queue.put(
+        (bot.send_message, (chat_id, f"Page {page+1}", None, None, None, markup))
+    )
+    safe_send_message(chat_id, f"Page {page+1}", markup)
 # ==============================
 # MY MEDIA BUTTON
 # ==============================
